@@ -1,0 +1,166 @@
+/* Wiring:
+  The wiring for the RTC module is:
+
+  VCC --> 5V
+  GND --> GND
+  SDA --> A4
+  SCL --> A5
+
+  The wiring for the BMP180 pressure sensor is:
+
+  VCC --> 3.3V
+  GND --> GND
+  SDA --> SDA ()
+  SCL --> SCL ()
+
+  The wiring for the SD card module is
+  xxx
+  xxx
+  xxx
+  xxx
+
+  The wiring for the LED is:
+
+  Anode (positive) --> Digital Pin 4
+  Cathode (negative) --> GND
+
+  The wiring for the buzzer is:
+
+  Positive --> Digital Pin 3
+  Negative --> GND
+
+*/
+
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+//#include <Adafruit_BMP085_U.h>
+#include <Adafruit_BMP085.h>
+#include <SD.h>
+#include <RTClib.h>
+#include <SoftwareSerial.h>
+
+// Constants
+const int buzzer = 3; // Pin number for buzzer
+const int led = 4; // Pin number for LED
+const int pressureVariationThreshold1 = 2; // hPa
+const int pressureVariationThreshold2 = 4; // hPa
+const int pressureThreshold = 1009; // hPa
+const int buzzer_LED_Interval = 60 * 1000; // 1 minute in milliseconds
+const int flashInterval = 5 * 60 * 1000; // 5 minutes in milliseconds
+const int alarmInterval = 4 * 1000; // 4 seconds in milliseconds
+const int offInterval = 1 * 1000; // 1 second in milliseconds
+const int Intervals = 12;
+const int intervalTime = 30 * 60 * 1000; // 30 minutes in milliseconds
+int effective_delay = 0;
+int fileNum = 1; // for the log file sequence
+
+// Variables
+int pressureVariation = 0;
+int flashCounter = 0;
+unsigned long prevTime = 0;
+
+// RTC
+RTC_DS3231 rtc;
+
+// BMP085
+// Adafruit_BMP085_Unified bmp;
+Adafruit_BMP085 bmp;
+
+void setup() {
+  // Initialize I2C communication
+  Wire.begin();
+
+  // Initialize BMP085
+  bmp.begin();
+
+  // Initialize RTC
+  rtc.begin();
+
+  // Initialize SD card
+  if (!SD.begin(10)) {
+    // If SD card is not connected, turn on the buzzer for 1 minute
+    tone(buzzer, 440, 60000);
+    while (1);
+  }
+
+  // Initialize pin modes
+  pinMode(buzzer, OUTPUT);
+  pinMode(led, OUTPUT);
+
+  // Find the latest file number
+  while (SD.exists(String("Baro_log_file_") + String(fileNum))) {
+    fileNum++;
+  }
+}
+
+
+void loop() {
+  // Get the current pressure
+  float pressure = bmp.readPressure();
+  // Get the current date and time
+  DateTime now = rtc.now();
+
+  // Write the current pressure and date/time to the file
+  File dataFile = SD.open(String("Baro_log_file_") + String(fileNum), FILE_WRITE);
+  if (dataFile) {
+    dataFile.print(now.year(), DEC);
+    dataFile.print("/");
+    dataFile.print(now.month(), DEC);
+    dataFile.print("/");
+    dataFile.print(now.day(), DEC);
+    dataFile.print(" ");
+    dataFile.print(now.hour(), DEC);
+    dataFile.print(":");
+    dataFile.print(now.minute(), DEC);
+    dataFile.print(":");
+    dataFile.print(now.second(), DEC);
+    dataFile.print("\t");
+    dataFile.println(pressure, 2);
+    dataFile.close();
+  }
+
+  static float prevPressure = 0;
+  static unsigned long lastAlarmTime = 0;
+
+  // Verify interval time
+  if ((now.unixtime() - lastAlarmTime) < intervalTime) {
+    return;
+  }
+
+  if (prevPressure == 0) {
+    prevPressure = pressure;
+  }
+
+  // Get the variation in pressure
+  pressureVariation = pressure - prevPressure;
+  prevPressure = pressure;
+
+  // Check if the variation in pressure is above threshold 1
+  if (abs(pressureVariation) > pressureVariationThreshold1) {
+    // Turn on buzzer and LED for 1 minute
+    tone(buzzer, 440, 60000);
+    digitalWrite(led, HIGH);
+    delay(buzzer_LED_Interval);
+    effective_delay = buzzer_LED_Interval;
+    // Turn off buzzer and LED
+    noTone(buzzer);
+    digitalWrite(led, LOW);
+  }
+  // Check if the pressure is below threshold 2 and the variation in pressure is below threshold 2
+  if (pressure < pressureThreshold && pressureVariation < pressureVariationThreshold2) {
+    flashCounter = 0;
+    // Turn on buzzer and LED for 12 cycles (1 minute)
+    for (flashCounter = 0; flashCounter < 12; flashCounter++) {
+      tone(buzzer, 440, alarmInterval);
+      digitalWrite(led, HIGH);
+      delay(alarmInterval);
+      noTone(buzzer);
+      digitalWrite(led, LOW);
+      delay(offInterval);
+    }
+    effective_delay = Intervals * (offInterval + alarmInterval);
+  }
+
+  // Delay for the flash interval
+  delay(flashInterval - effective_delay);
+}
