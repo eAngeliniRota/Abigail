@@ -1,7 +1,10 @@
+// Note that the Serial.println have been commented to spare memory, uncomment them if testing with the IDE!
+
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 #include <SD.h>
 #include <Adafruit_BMP085.h>
+#include <Adafruit_RGBLCDShield.h>
 
 // Constants
 const int GPS_BAUD = 9600;
@@ -34,6 +37,7 @@ Adafruit_BMP085 bmp;
 
 SoftwareSerial GPSSerial(2, 3);
 TinyGPSPlus gps;
+Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 
 File gpsFile;
 File baroFile;
@@ -43,16 +47,19 @@ void setup() {
   Serial.begin(GPS_BAUD);
   GPSSerial.begin(GPS_BAUD);
 
+  // Initialise LCD's number of columns and rows:
+  lcd.begin(16, 2);
+
   // Initialize BMP
   bmp.begin();
   if (!bmp.begin()) {
     // If not initialized, turn on the error LED and print an error message
     digitalWrite(LED_BARO, HIGH);
-    Serial.println("Error initializing BMP object!");
+    // Serial.println("Error initializing BMP object!");
   }
 
   // Notify user that the GPS is searching for a position
-  Serial.println("Searching for GPS position...");
+  // Serial.println("Searching for GPS position...");
 
   // Set LED pins for GPS fix confirmation and signal error as outputs, as well as BUZZER and LED pins as outputs
   pinMode(LED_CONFIRM_GPS_FIX, OUTPUT);
@@ -67,7 +74,7 @@ void setup() {
     // Flash the signal error LED if the BMP085 initialization failed
     digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
     delay(1000 / FLASH_FREQUENCY / 2);
-    Serial.println("BMP085 barometer initialization failed.");
+    // Serial.println("BMP085 barometer initialization failed.");
     return;
   }
 
@@ -76,7 +83,7 @@ void setup() {
     // Flash the signal error LED if the SD card initialization failed
     digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
     delay(1000 / FLASH_FREQUENCY / 2);
-    Serial.println("SD card initialization failed.");
+    // Serial.println("SD card initialization failed.");
     return;
   }
 
@@ -86,7 +93,7 @@ void setup() {
     // Flash the signal error LED if there was an error opening the GPS file
     digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
     delay(1000 / FLASH_FREQUENCY / 2);
-    Serial.println("Error opening GPS file.");
+    // Serial.println("Error opening GPS file.");
     return;
   }
   // Check if the headers already exist in the file
@@ -101,7 +108,7 @@ void setup() {
     // Flash the signal error LED if there was an error opening the barometer file
     digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
     delay(1000 / FLASH_FREQUENCY / 2);
-    Serial.println("Error opening barometer file.");
+    // Serial.println("Error opening barometer file.");
     return;
   }
   // Check if the headers already exist in the file
@@ -119,6 +126,9 @@ void setup() {
 
 void loop() {
 
+  // clear the LCD
+  lcd.clear();
+  uint8_t buttons = lcd.readButtons();
   /*
     Checking if there is any data available to be read from the GPS module, and if there is, it is being passed to the gps.encode() function
     The gps.encode() function is decoding the data from the GPS module into a usable format
@@ -126,6 +136,31 @@ void loop() {
 
   while (GPSSerial.available() > 0) {
     gps.encode(GPSSerial.read());
+  }
+
+  // Print Lat and Lon
+  // Check if the GPS module has a valid location
+  if (gps.location.isValid()) {
+    // If valid, turn on the LED to indicate GPS fix
+    digitalWrite(LED_CONFIRM_GPS_FIX, HIGH);
+    // Need to code to write the Lat and Long
+    lcd.setCursor(0, 0);
+    lcd.print("Lat " + String(gps.location.lat(), 6));
+    lcd.setCursor(0, 1);
+    lcd.print("Lon " + String(gps.location.lng(), 6));
+    if (buttons & BUTTON_UP) {
+      lcd.setCursor(0, 0);
+      lcd.print("Lat " + String(gps.location.lat(), 6));
+      lcd.setCursor(0, 1);
+      lcd.print("Lon " + String(gps.location.lng(), 6));
+    }
+  } else {
+    lcd.print("No GPS fix yet");
+  }
+
+  if (buttons & BUTTON_DOWN) {
+    lcd.setCursor(0, 0);
+    lcd.println("Pressure: " + String(bmp.readPressure() / 100.0) + " hPa");
   }
 
   // Manage BARO data (excluded from the GPS section at it requires only)
@@ -139,7 +174,7 @@ void loop() {
       } else {
         // If the write was unsuccessful, turn on the  LED and print an error message
         digitalWrite(LED_BARO, HIGH);
-        Serial.println("Error writing BARO data to file!");
+        // Serial.println("Error writing BARO data to file!");
       }
     }
 
@@ -154,12 +189,27 @@ void loop() {
         // Turn on LED_BARO_ABS and BUZZER
         digitalWrite(LED_BARO_ABS, HIGH);
         digitalWrite(BUZZER, HIGH);
-      } else {
-        // Turn off LED_BARO_ABS and BUZZER
-        digitalWrite(LED_BARO_ABS, LOW);
-        digitalWrite(BUZZER, LOW);
+
+        if (buttons & BUTTON_LEFT) {
+          lcd.setCursor(0, 0);
+          if (pressure - prevPressure > 0) {
+            lcd.println("Increase in atm pressure");
+          } else {
+            lcd.println("Decrease in atm pressure");
+          }
+        }
+      }
+
+    } else {
+      // Turn off LED_BARO_ABS and BUZZER
+      digitalWrite(LED_BARO_ABS, LOW);
+      digitalWrite(BUZZER, LOW);
+      if (buttons & BUTTON_LEFT) {
+        lcd.setCursor(0, 0);
+        lcd.clear();
       }
     }
+
 
     // Check if there is data recorded for at least the given interval of 120 minutes
     if (millis() - lastDataUpdate >= pressureVariationThreshold2Interval) {
@@ -169,10 +219,18 @@ void loop() {
         // Turn on LED_BARO_MIN and BUZZER
         digitalWrite(LED_BARO_MIN, HIGH);
         digitalWrite(BUZZER, HIGH);
+        if (buttons & BUTTON_RIGHT) {
+          lcd.setCursor(0, 0);
+          lcd.println("Sudden decrease of atm pressure");
+        }
       } else {
         // Turn off LED_BARO_MIN and BUZZER
         digitalWrite(LED_BARO_MIN, LOW);
         digitalWrite(BUZZER, LOW);
+        if (buttons & BUTTON_RIGHT) {
+          lcd.setCursor(0, 0);
+          lcd.clear();
+        }
       }
     }
 
@@ -200,7 +258,7 @@ void loop() {
       } else {
         // If the write was unsuccessful, turn on the error LED and print an error message
         digitalWrite(LED_SIGNAL_ERR, HIGH);
-        Serial.println("Error writing GPS data to file!");
+        // Serial.println("Error writing GPS data to file!");
       }
     }
   } else {
