@@ -10,14 +10,17 @@
 const int GPS_BAUD = 9600;
 const int LED_CONFIRM_GPS_FIX = 9;
 const int LED_SIGNAL_ERR = 8;
-const int FLASH_FREQUENCY = 10;
-const int BUZZER = 5;    // Pin number for BUZZER
-const int LED_BARO = 4;  // Pin number for LED_BARO
 
+const int BUZZER = 5;  // Pin number for BUZZER
+
+// LED for SD card declared in code in A3
+const int LED_SD_ERR = 3;
+
+const int LED_BARO = 4;  // Pin number for LED_BARO
 const int LED_BARO_ABS = 6;
 const int LED_BARO_MIN = 7;
 
-const int interval = 30 * 1000; // control the frequency at which the code logs the GPS and barometer data, in seconds
+const int interval = 30 * 1000;             // control the frequency at which the code logs the GPS and barometer data, in seconds
 const int pressureVariationThreshold1 = 2;  // hPa
 const int pressureVariationThreshold2 = 4;  // hPa
 const int pressureThreshold = 1009;         // hPa
@@ -47,20 +50,6 @@ void setup() {
   Serial.begin(GPS_BAUD);
   GPSSerial.begin(GPS_BAUD);
 
-  // Initialise LCD's number of columns and rows:
-  lcd.begin(16, 2);
-
-  // Initialize BMP
-  bmp.begin();
-  if (!bmp.begin()) {
-    // If not initialized, turn on the error LED and print an error message
-    digitalWrite(LED_BARO, HIGH);
-    // Serial.println("Error initializing BMP object!");
-  }
-
-  // Notify user that the GPS is searching for a position
-  // Serial.println("Searching for GPS position...");
-
   // Set LED pins for GPS fix confirmation and signal error as outputs, as well as BUZZER and LED pins as outputs
   pinMode(LED_CONFIRM_GPS_FIX, OUTPUT);
   pinMode(LED_SIGNAL_ERR, OUTPUT);
@@ -69,32 +58,45 @@ void setup() {
   pinMode(LED_BARO_ABS, OUTPUT);
   pinMode(LED_BARO_MIN, OUTPUT);
 
+  pinMode(LED_SD_ERR, OUTPUT);
+
+  // Initialise LCD's number of columns and rows:
+  lcd.begin(16, 2);
+
+  // Initialize BMP
+  bmp.begin();
+  while (!bmp.begin()) {
+    // If not initialized, turn on the error LED and print an error message
+    digitalWrite(LED_BARO, HIGH);
+    // Serial.println("Error initializing BMP object!");
+  }
+
+  // Notify user that the GPS is searching for a position
+  // Serial.println("Searching for GPS position...");
+
   // Initialize I2C communication for BMP085 barometer
-  if (!bmp.begin(BMP085_STANDARD)) {
+  while (!bmp.begin(BMP085_STANDARD)) {
     // Flash the signal error LED if the BMP085 initialization failed
-    digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
-    delay(1000 / FLASH_FREQUENCY / 2);
+    digitalWrite(LED_BARO, HIGH);
     // Serial.println("BMP085 barometer initialization failed.");
     return;
   }
 
   // Check if SD card is initialized
-  if (!SD.begin(10)) {
+  while (!SD.begin(10)) {  // Chip select of the sd card - MISO and MOSI are SPI and standard, the CS goes on 10
     // Flash the signal error LED if the SD card initialization failed
-    digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
-    delay(1000 / FLASH_FREQUENCY / 2);
+    analogWrite(LED_SD_ERR, 255);
     // Serial.println("SD card initialization failed.");
     return;
   }
 
   // Open the GPS log file for writing
   gpsFile = SD.open("Abigail_GPS_log.csv", FILE_WRITE);
-  if (!gpsFile) {
+  while (!gpsFile) {
     // Flash the signal error LED if there was an error opening the GPS file
-    digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
-    delay(1000 / FLASH_FREQUENCY / 2);
+    digitalWrite(LED_SIGNAL_ERR, HIGH);
+    analogWrite(LED_SD_ERR, 255);
     // Serial.println("Error opening GPS file.");
-    return;
   }
   // Check if the headers already exist in the file
   if (gpsFile.size() == 0) {
@@ -104,12 +106,11 @@ void setup() {
 
   // Open the barometer log file for writing
   baroFile = SD.open("Abigail_BARO_log.csv", FILE_WRITE);
-  if (!baroFile) {
+  while (!baroFile) {
     // Flash the signal error LED if there was an error opening the barometer file
-    digitalWrite(LED_SIGNAL_ERR, !digitalRead(LED_SIGNAL_ERR));
-    delay(1000 / FLASH_FREQUENCY / 2);
+    digitalWrite(LED_BARO, HIGH);
+    analogWrite(LED_SD_ERR, 255);
     // Serial.println("Error opening barometer file.");
-    return;
   }
   // Check if the headers already exist in the file
   if (baroFile.size() == 0) {
@@ -122,6 +123,11 @@ void setup() {
 
   // Turn off the signal error LED
   digitalWrite(LED_SIGNAL_ERR, LOW);
+  digitalWrite(LED_CONFIRM_GPS_FIX, LOW);
+  analogWrite(LED_SD_ERR, 0);
+  digitalWrite(LED_BARO, LOW);
+  digitalWrite(LED_BARO_ABS, LOW);
+  digitalWrite(LED_BARO_MIN, LOW);
 }
 
 void loop() {
