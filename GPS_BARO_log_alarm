@@ -4,7 +4,7 @@
 #include <SoftwareSerial.h>
 #include <SD.h>
 #include <Adafruit_BMP085.h>
-#include <Adafruit_RGBLCDShield.h>
+#include <LiquidCrystal_I2C.h>
 
 // Constants
 const int GPS_BAUD = 9600;
@@ -28,8 +28,6 @@ const int pressureThreshold = 1009;         // hPa
 const int pressureVariationThreshold1Interval = 30 * 60 * 1000;   // Check if there is data recorded for at least the given interval of 30 minutes
 const int pressureVariationThreshold2Interval = 120 * 60 * 1000;  // Check if there is data recorded for at least the given interval of 120 minutes
 
-int pressureVariation = 0;
-int pressure = 0;
 int prevPressure = 0;
 
 unsigned short prevTime = 0;
@@ -40,7 +38,8 @@ Adafruit_BMP085 bmp;
 
 SoftwareSerial GPSSerial(2, 3);
 TinyGPSPlus gps;
-Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+
+LiquidCrystal_I2C lcd(0x3F, 16, 2); // set the LCD address to 0x3F for a 16 chars and 2 line display
 
 File gpsFile;
 File baroFile;
@@ -57,37 +56,33 @@ void setup() {
   pinMode(LED_BARO, OUTPUT);
   pinMode(LED_BARO_ABS, OUTPUT);
   pinMode(LED_BARO_MIN, OUTPUT);
-
   pinMode(LED_SD_ERR, OUTPUT);
 
   // Initialise LCD's number of columns and rows:
-  lcd.begin(16, 2);
+  lcd.init();
+  lcd.clear();
+  lcd.backlight();
 
   // Initialize BMP
   bmp.begin();
   while (!bmp.begin()) {
     // If not initialized, turn on the error LED and print an error message
     digitalWrite(LED_BARO, HIGH);
-    // Serial.println("Error initializing BMP object!");
+    Serial.println(F("Error initializing BMP object!"));
   }
-
-  // Notify user that the GPS is searching for a position
-  // Serial.println("Searching for GPS position...");
 
   // Initialize I2C communication for BMP085 barometer
   while (!bmp.begin(BMP085_STANDARD)) {
     // Flash the signal error LED if the BMP085 initialization failed
     digitalWrite(LED_BARO, HIGH);
-    // Serial.println("BMP085 barometer initialization failed.");
-    return;
+    Serial.println(F("BMP085 barometer initialization failed."));
   }
 
   // Check if SD card is initialized
   while (!SD.begin(10)) {  // Chip select of the sd card - MISO and MOSI are SPI and standard, the CS goes on 10
     // Flash the signal error LED if the SD card initialization failed
     analogWrite(LED_SD_ERR, 255);
-    // Serial.println("SD card initialization failed.");
-    return;
+    Serial.println(F("SD card initialization failed."));
   }
 
   // Open the GPS log file for writing
@@ -96,12 +91,12 @@ void setup() {
     // Flash the signal error LED if there was an error opening the GPS file
     digitalWrite(LED_SIGNAL_ERR, HIGH);
     analogWrite(LED_SD_ERR, 255);
-    // Serial.println("Error opening GPS file.");
+    Serial.println(F("Error opening GPS file."));
   }
   // Check if the headers already exist in the file
   if (gpsFile.size() == 0) {
     // Write headers for the GPS log file
-    gpsFile.println("Date,Time,Latitude,Longitude");
+    gpsFile.println(F("Date,Time,Latitude,Longitude"));
   }
 
   // Open the barometer log file for writing
@@ -110,7 +105,7 @@ void setup() {
     // Flash the signal error LED if there was an error opening the barometer file
     digitalWrite(LED_BARO, HIGH);
     analogWrite(LED_SD_ERR, 255);
-    // Serial.println("Error opening barometer file.");
+    Serial.println(F("Error opening barometer file."));
   }
   // Check if the headers already exist in the file
   if (baroFile.size() == 0) {
@@ -128,13 +123,40 @@ void setup() {
   digitalWrite(LED_BARO, LOW);
   digitalWrite(LED_BARO_ABS, LOW);
   digitalWrite(LED_BARO_MIN, LOW);
-}
 
-void loop() {
+  // Share that the initialisation is complete
+  lcd.println("Initialisation complete");
+
+  // This will disappear as soon as I have the LCD
+  digitalWrite(LED_SIGNAL_ERR, HIGH);
+  digitalWrite(LED_CONFIRM_GPS_FIX, HIGH);
+  analogWrite(LED_SD_ERR, 255);
+  digitalWrite(LED_BARO, HIGH);
+  digitalWrite(LED_BARO_ABS, HIGH);
+  digitalWrite(LED_BARO_MIN, HIGH);
+
+  delay(interval);
+
+  // This will disappear as soon as I have the LCD
+  digitalWrite(LED_SIGNAL_ERR, LOW);
+  digitalWrite(LED_CONFIRM_GPS_FIX, LOW);
+  analogWrite(LED_SD_ERR, 0);
+  digitalWrite(LED_BARO, LOW);
+  digitalWrite(LED_BARO_ABS, LOW);
+  digitalWrite(LED_BARO_MIN, LOW);
 
   // clear the LCD
   lcd.clear();
-  uint8_t buttons = lcd.readButtons();
+}
+
+
+
+
+void loop() {
+
+  // define the time at which the circus begins
+  int loop_time = millis();
+
   /*
     Checking if there is any data available to be read from the GPS module, and if there is, it is being passed to the gps.encode() function
     The gps.encode() function is decoding the data from the GPS module into a usable format
@@ -144,117 +166,57 @@ void loop() {
     gps.encode(GPSSerial.read());
   }
 
-  // Print Lat and Lon
+  // Get pressure value from BMP085 barometer
+  int pressure = bmp.readPressure();
+
+  // Check if there is data recorded for at least the given interval
+  if (loop_time - lastDataUpdate >= pressureVariationThreshold1Interval) {
+    // Check if the absolute variation between the current pressure and the pressure recorded 30 minutes before is greater than the given threshold of 2 hPa
+    int pressureVariation = abs(pressure - prevPressure);
+    if (pressureVariation >= pressureVariationThreshold1) {
+      // Turn on LED_BARO_ABS and BUZZER
+      digitalWrite(LED_BARO_ABS, HIGH);
+      digitalWrite(BUZZER, HIGH);
+    }
+  } else {
+    // Turn off LED_BARO_ABS and BUZZER
+    digitalWrite(LED_BARO_ABS, LOW);
+    digitalWrite(BUZZER, LOW);
+  }
+
+  // Check if there is data recorded for at least the given interval of 120 minutes
+  if (loop_time - lastDataUpdate >= pressureVariationThreshold2Interval) {
+    // Check if the pressure decreased by 4 hPa or more in the last 120 minutes
+    int pressureVariation = pressure - prevPressure;
+    if (pressureVariation <= -pressureVariationThreshold2) {
+      // Turn on LED_BARO_MIN and BUZZER
+      digitalWrite(LED_BARO_MIN, HIGH);
+      digitalWrite(BUZZER, HIGH);
+    } else {
+      // Turn off LED_BARO_MIN and BUZZER
+      digitalWrite(LED_BARO_MIN, LOW);
+      digitalWrite(BUZZER, LOW);
+
+    }
+  }
+  // Store the current pressure for comparison in the next loop iteration
+  prevPressure = pressure;
+
+  // Manage GPS data
   // Check if the GPS module has a valid location
+  // If not valid, do not proceed with logging the GPS data
   if (gps.location.isValid()) {
     // If valid, turn on the LED to indicate GPS fix
     digitalWrite(LED_CONFIRM_GPS_FIX, HIGH);
-    // Need to code to write the Lat and Long
+
+    // write to LCD
     lcd.setCursor(0, 0);
     lcd.print("Lat " + String(gps.location.lat(), 6));
     lcd.setCursor(0, 1);
     lcd.print("Lon " + String(gps.location.lng(), 6));
-    if (buttons & BUTTON_UP) {
-      lcd.setCursor(0, 0);
-      lcd.print("Lat " + String(gps.location.lat(), 6));
-      lcd.setCursor(0, 1);
-      lcd.print("Lon " + String(gps.location.lng(), 6));
-    }
-  } else {
-    lcd.print("No GPS fix yet");
-  }
-
-  if (buttons & BUTTON_DOWN) {
-    lcd.setCursor(0, 0);
-    lcd.println("Pressure: " + String(bmp.readPressure() / 100.0) + " hPa");
-  }
-
-  // Manage BARO data (excluded from the GPS section at it requires only)
-  if (gps.time.isValid() && gps.date.isValid()) {
-    // Check if the interval since the last data update has passed
-    if (millis() - lastDataUpdate > interval) {
-      // Write the BARO data to the file
-      if (baroFile.println(String(gps.date.value()) + "," + String(gps.time.value()) + "," + String(bmp.readPressure()))) {
-        // If the write was successful, turn off the error LED
-        digitalWrite(LED_BARO, LOW);
-      } else {
-        // If the write was unsuccessful, turn on the  LED and print an error message
-        digitalWrite(LED_BARO, HIGH);
-        // Serial.println("Error writing BARO data to file!");
-      }
-    }
-
-    // Get pressure value from BMP085 barometer
-    int pressure = bmp.readPressure();
-
-    // Check if there is data recorded for at least the given interval of 30 minutes
-    if (millis() - lastDataUpdate >= pressureVariationThreshold1Interval) {
-      // Check if the absolute variation between the current pressure and the pressure recorded 30 minutes before is greater than the given threshold of 2 hPa
-      int pressureVariation = abs(pressure - prevPressure);
-      if (pressureVariation >= pressureVariationThreshold1) {
-        // Turn on LED_BARO_ABS and BUZZER
-        digitalWrite(LED_BARO_ABS, HIGH);
-        digitalWrite(BUZZER, HIGH);
-
-        if (buttons & BUTTON_LEFT) {
-          lcd.setCursor(0, 0);
-          if (pressure - prevPressure > 0) {
-            lcd.println("Increase in atm pressure");
-          } else {
-            lcd.println("Decrease in atm pressure");
-          }
-        }
-      }
-
-    } else {
-      // Turn off LED_BARO_ABS and BUZZER
-      digitalWrite(LED_BARO_ABS, LOW);
-      digitalWrite(BUZZER, LOW);
-      if (buttons & BUTTON_LEFT) {
-        lcd.setCursor(0, 0);
-        lcd.clear();
-      }
-    }
-
-
-    // Check if there is data recorded for at least the given interval of 120 minutes
-    if (millis() - lastDataUpdate >= pressureVariationThreshold2Interval) {
-      // Check if the pressure decreased by 4 hPa or more in the last 120 minutes
-      int pressureVariation = pressure - prevPressure;
-      if (pressureVariation <= -pressureVariationThreshold2) {
-        // Turn on LED_BARO_MIN and BUZZER
-        digitalWrite(LED_BARO_MIN, HIGH);
-        digitalWrite(BUZZER, HIGH);
-        if (buttons & BUTTON_RIGHT) {
-          lcd.setCursor(0, 0);
-          lcd.println("Sudden decrease of atm pressure");
-        }
-      } else {
-        // Turn off LED_BARO_MIN and BUZZER
-        digitalWrite(LED_BARO_MIN, LOW);
-        digitalWrite(BUZZER, LOW);
-        if (buttons & BUTTON_RIGHT) {
-          lcd.setCursor(0, 0);
-          lcd.clear();
-        }
-      }
-    }
-
-    // Store the current pressure for comparison in the next loop iteration
-    prevPressure = pressure;
-    lastDataUpdate = millis();
-  } else {
-    return;
-  }
-
-  // Manage GPS data
-  // Check if the GPS module has a valid location
-  if (gps.location.isValid()) {
-    // If valid, turn on the LED to indicate GPS fix
-    digitalWrite(LED_CONFIRM_GPS_FIX, HIGH);
 
     // Check if the interval since the last data update has passed
-    if (millis() - lastDataUpdate > interval) {
+    if (loop_time - lastDataUpdate > interval) {
       // Update the time of the last data update
       lastDataUpdate = millis();
       // Write the GPS data to the file
@@ -264,11 +226,30 @@ void loop() {
       } else {
         // If the write was unsuccessful, turn on the error LED and print an error message
         digitalWrite(LED_SIGNAL_ERR, HIGH);
-        // Serial.println("Error writing GPS data to file!");
+        Serial.println(F("Error writing GPS data to file!"));
       }
     }
   } else {
-    // If not valid, do not proceed with logging the GPS data
-    return;
+    digitalWrite(LED_CONFIRM_GPS_FIX, LOW);
+  }
+
+  // Manage BARO data (excluded from the GPS section at it requires only)
+  if (gps.time.isValid() && gps.date.isValid()) {
+    // Check if the interval since the last data update has passed
+    if (loop_time - lastDataUpdate > interval) {
+      // Write the BARO data to the file
+      if (baroFile.println(String(gps.date.value()) + "," + String(gps.time.value()) + "," + String(bmp.readPressure()))) {
+        // If the write was successful, turn off the error LED
+        digitalWrite(LED_BARO, LOW);
+      } else {
+        // If the write was unsuccessful, turn on the  LED and print an error message
+        digitalWrite(LED_BARO, HIGH);
+        Serial.println(F("Error writing BARO data to file!"));
+      }
+    }
+
+    lastDataUpdate = millis();
+    delay(interval / 30);
   }
 }
+
